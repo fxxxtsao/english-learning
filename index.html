@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>English Practice</title>
+  <link rel="manifest" href="manifest.json">
+  <!-- Older iOS reads this instead of the manifest icons when adding to the home screen. -->
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="English">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="app-header">
+      <button id="btn-mode-toggle" class="icon-btn" type="button" aria-label="Switch reading/listening mode">&#8646;</button>
+      <div>
+        <div id="header-title">English Practice</div>
+        <div id="mode-label"></div>
+      </div>
+      <button id="btn-stats" class="icon-btn" type="button" aria-label="Show stats">&#128202;</button>
+    </header>
+
+    <div id="offline-banner" hidden>Offline &mdash; answers are saved and will sync automatically once you're back online.</div>
+    <div id="lesson-errors" hidden></div>
+
+    <main id="app-main">
+      <!-- First-run setup: Apps Script URL + sync token, never hardcoded. -->
+      <section id="screen-setup" hidden>
+        <h1>Setup</h1>
+        <p>Paste the Apps Script Web App URL and your sync token to connect this device.</p>
+        <label for="input-url">Apps Script URL</label>
+        <input id="input-url" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec">
+        <label for="input-token">Sync Token</label>
+        <input id="input-token" type="text" autocomplete="off" placeholder="paste your token">
+        <button id="btn-save-config" class="big-btn primary" type="button">Save</button>
+        <p id="setup-error" hidden></p>
+      </section>
+
+      <section id="screen-loading" hidden>
+        <p>Loading today's practice&hellip;</p>
+      </section>
+
+      <section id="screen-empty" hidden>
+        <p>Nothing to practice right now &mdash; today's lesson hasn't been generated yet and nothing is due for review. Check back later.</p>
+      </section>
+
+      <section id="screen-practice" hidden>
+        <div id="practice-banner"></div>
+
+        <div id="panel-reading" hidden>
+          <h2 id="reading-context"></h2>
+          <div id="reading-question-area"></div>
+        </div>
+
+        <div id="panel-listening" hidden>
+          <h2 id="listening-context"></h2>
+          <audio id="audio-player" preload="metadata"></audio>
+          <div id="listening-transcript-fallback" hidden></div>
+          <span id="listening-time">0:00</span>
+          <div id="listening-controls">
+            <button id="btn-rewind15" class="big-btn" type="button" aria-label="Rewind 15 seconds">&#9100; 15s</button>
+            <button id="btn-play-pause" class="big-btn primary" type="button" aria-label="Play or pause">&#9654;</button>
+          </div>
+          <div id="listening-question-area"></div>
+        </div>
+
+        <div id="vocab-panel"></div>
+      </section>
+
+      <section id="screen-stats" hidden>
+        <h1>Stats</h1>
+        <p>Days practiced this week: <span id="stat-days">0</span> / 7</p>
+        <p>Accuracy this week: <span id="stat-accuracy">&mdash;</span></p>
+        <button id="btn-back-from-stats" class="big-btn" type="button">Back</button>
+      </section>
+    </main>
+  </div>
+
+  <!-- Fixed load order: contract -> lesson -> review -> sync -> api -> store -> app -->
+  <script src="js/contract.js"></script>
+  <script src="js/lesson.js"></script>
+  <script src="js/review.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# Personal deployment values (Apps Script URL + sync token). Never commit.
+MY-SETUP.local.md
+js/config.local.js
+
+# multi-llm working notes -- development process, not part of the project
+multi-llm-state.md
+
+# OS / editor noise
+Thumbs.db
+.DS_Store
+.vscode/
+node_modules/
