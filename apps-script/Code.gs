@@ -79,6 +79,8 @@ function route(e) {
         return actionAppend(e);
       case Contract.ACTIONS.SET_LEVEL:
         return actionSetLevel(e);
+      case Contract.ACTIONS.ADD_MATERIALS:
+        return actionAddMaterials(e);
       default:
         return jsonOutput({ ok: false, error: 'unknown_action' });
     }
@@ -129,6 +131,18 @@ function actionLessons(params) {
 
   values.forEach(function (row, idx) {
     var rawLessonId = row[0] ? String(row[0]) : '';
+
+    // An empty lesson_id marks a "material row" (source text + audio ready,
+    // no questions yet — written by action=add_materials, filled in later
+    // by Spark; see docs/specs/2026-09-02-content-pipeline.md). That is a
+    // normal inventory state, not a broken row, so it is skipped entirely
+    // here: not returned in `lessons` (nothing to render — no questions
+    // yet) and not reported in `errors` (parseLessonRow would otherwise
+    // flag it as MISSING_FIELD, which would be misleading).
+    if (!rawLessonId) {
+      return;
+    }
+
     // `since` is exclusive: only rows strictly after it are returned. Rows
     // with an unreadable lesson_id are kept (not skipped) so a broken recent
     // row still surfaces in `errors` instead of disappearing.
@@ -378,6 +392,113 @@ function actionSetLevel(e) {
 
   sheet.getRange(Contract.SETTINGS.LEVEL_VALUE_CELL).setValue(body.level);
   return jsonOutput({ ok: true, level: body.level });
+}
+
+/**
+ * action=add_materials (POST) — batch-write freshly fetched material rows
+ * into the `lessons` sheet.
+ *
+ * A "material row" is a lessons-sheet row with `lesson_id` intentionally
+ * blank: source text + audio are ready, but no questions exist yet (see
+ * docs/specs/2026-09-02-content-pipeline.md and tools/fetch-materials.js,
+ * which does the fetching now that Spark can't reach VOA/BBC directly).
+ * Spark turns a material row into a real lesson later by filling in
+ * lesson_id, the three JSON question/vocab columns, and generated_at. See
+ * also the lesson_id-empty skip added to actionLessons above, which keeps
+ * these rows from being reported as broken to the web app in the meantime.
+ *
+ * Dedup key is `source_url` — the spec is zero-tolerance on duplicates
+ * there (docs/specs/2026-09-02-content-pipeline.md, 驗收查詢). Rows whose
+ * source_url already exists in the sheet, or repeats earlier in the same
+ * batch, are skipped rather than written twice.
+ *
+ * Concurrency: same reasoning as actionAppend — without a lock, two
+ * concurrent writers could both read the same "existing source_urls"
+ * snapshot and each append, letting a duplicate through despite the check
+ * above.
+ *
+ * Body shape: a JSON array of material objects, each keyed by
+ * Contract.LESSON_COLUMNS names (any lesson_id sent is ignored — see below).
+ */
+function actionAddMaterials(e) {
+  var body = parseJsonBody(e);
+  if (!body || !Array.isArray(body)) {
+    return jsonOutput({ ok: false, error: 'invalid_body' });
+  }
+
+  var sheet = getSheetByName(Contract.SHEETS.LESSONS);
+  if (!sheet) {
+    return jsonOutput({ ok: false, error: 'sheet_not_found', sheet: Contract.SHEETS.LESSONS });
+  }
+
+  var lock = LockService.getScriptLock();
+  var gotLock = lock.tryLock(30000); // wait up to 30s; well under the 6-minute execution cap
+  if (!gotLock) {
+    return jsonOutput({ ok: false, error: 'lock_timeout' });
+  }
+
+  try {
+    var idxSourceUrl = Contract.LESSON_COLUMNS.indexOf('source_url');
+    var idxLessonId = Contract.LESSON_COLUMNS.indexOf('lesson_id');
+
+    var lastRow = sheet.getLastRow();
+    var seen = {};
+    if (lastRow >= 2) {
+      var existingUrls = sheet.getRange(2, idxSourceUrl + 1, lastRow - 1, 1).getValues();
+      existingUrls.forEach(function (row) {
+        if (row[0]) seen[String(row[0])] = true;
+      });
+    }
+
+    var rowsToAppend = [];
+    var written = [];
+    var skipped = [];
+
+    body.forEach(function (material) {
+      if (!material || typeof material !== 'object') {
+        skipped.push({ source_url: null, reason: 'not_object' });
+        return;
+      }
+      var sourceUrl = material.source_url ? String(material.source_url) : '';
+      if (!sourceUrl) {
+        skipped.push({ source_url: null, reason: 'missing_source_url' });
+        return;
+      }
+      if (seen[sourceUrl]) {
+        skipped.push({ source_url: sourceUrl, reason: 'duplicate_source_url' });
+        return;
+      }
+      seen[sourceUrl] = true;
+
+      rowsToAppend.push(Contract.LESSON_COLUMNS.map(function (col, i) {
+        // lesson_id stays blank no matter what the caller sent — that is
+        // the definition of a material row (see doc comment above). Spark
+        // fills it in later, once questions exist.
+        if (i === idxLessonId) return '';
+        return material[col] !== undefined && material[col] !== null ? material[col] : '';
+      }));
+      written.push(sourceUrl);
+    });
+
+    if (rowsToAppend.length > 0) {
+      var startRow = sheet.getLastRow() + 1;
+
+      // Sheets auto-converts a date-looking string written into a cell to a
+      // real Date object. lesson_id is blank here, but Spark later writes an
+      // actual YYYY-MM-DD string into this same cell — force the column to
+      // plain text now so that write lands as a string, not a Date (this
+      // has already caused a real bug once).
+      sheet.getRange(startRow, idxLessonId + 1, rowsToAppend.length, 1).setNumberFormat('@');
+
+      sheet
+        .getRange(startRow, 1, rowsToAppend.length, Contract.LESSON_COLUMNS.length)
+        .setValues(rowsToAppend);
+    }
+
+    return jsonOutput({ ok: true, written: written, skipped: skipped });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ---------------------------------------------------------------------------

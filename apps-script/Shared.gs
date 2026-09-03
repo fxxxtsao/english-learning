@@ -142,7 +142,14 @@
     AUDIO: 'audio',
     PROGRESS: 'progress',
     APPEND: 'append',
-    SET_LEVEL: 'set_level'
+    SET_LEVEL: 'set_level',
+    /**
+     * Batch-writes material rows (lesson_id empty: text and audio ready,
+     * questions not written yet). Called by tools/upload-materials.js, never
+     * by the web app -- fetching moved off Gemini Spark once the source sites
+     * turned out to block it. See docs/specs/2026-09-02-content-pipeline.md.
+     */
+    ADD_MATERIALS: 'add_materials'
   };
 
   /**
@@ -242,7 +249,7 @@
  * Fatal vs. non-fatal boundary (docs/specs/2026-09-02-content-pipeline.md,
  * "測試決策" / "驗收查詢"):
  *
- *   FATAL -> parseLessonRow() returns { lesson: null, errors }.
+ *   FATAL -> parseLessonRow() returns { lesson: null, errors, kind: 'broken' }.
  *     The row is structurally unusable, so there is no lesson object worth
  *     handing to a caller:
  *       - row has fewer cells than Contract.LESSON_COLUMNS (ROW_TOO_SHORT)
@@ -252,9 +259,9 @@
  *         JSON (BAD_JSON), or parse to something other than an array
  *         (NOT_AN_ARRAY)
  *
- *   NON-FATAL -> parseLessonRow() still returns a lesson object; these are
- *   instead caught by validateLesson(lesson), which never rejects the
- *   lesson itself, only reports problems with it:
+ *   NON-FATAL -> parseLessonRow() still returns a lesson object (kind:
+ *   'lesson'); these are instead caught by validateLesson(lesson), which
+ *   never rejects the lesson itself, only reports problems with it:
  *       - question count / option count / answer_index range / missing
  *         explanation
  *       - vocab count, vocab entry shape, vocab term not found in the
@@ -262,11 +269,22 @@
  *       - audio segment length out of range
  *       - bad level / source / lesson_id / generated_at
  *
+ *   MATERIAL (not fatal, not a lesson) -> parseLessonRow() returns
+ *   { lesson: null, errors: [], kind: 'material', material }.
+ *     `lesson_id` is empty but `source_url` and `reading_text` are filled in
+ *     -- tools/fetch-materials.js already fetched this content, Gemini Spark
+ *     just hasn't turned it into a lesson (written questions) yet. This is
+ *     normal inventory, not corruption, so it never produces an error. See
+ *     isMaterialRow() and docs/specs/2026-09-02-content-pipeline.md's
+ *     "空值語意有三種" for the exact rule.
+ *
  * The reasoning: a structurally broken row can't be rendered at all, so
  * there is nothing useful to return. A structurally sound lesson with a
  * content problem (e.g. one vocab term the model hallucinated) is still
  * renderable -- the caller (daily health-check, or the web app) is in a
  * better position to decide whether to show it, skip it, or just flag it.
+ * A material row isn't renderable either, but it isn't broken -- the caller
+ * needs `kind` to tell the two "lesson: null" cases apart.
  *
  * Source of truth: docs/specs/2026-09-02-content-pipeline.md
  */
@@ -304,6 +322,21 @@
     return y + '-' + m + '-' + day;
   }
 
+  /**
+   * A "material row": `lesson_id` empty but `source_url` and `reading_text`
+   * filled in. tools/fetch-materials.js writes rows in exactly this shape --
+   * content fetched, questions not written yet -- and it is normal inventory
+   * to sit in that state for months, not a corrupted row. Works on the raw
+   * per-column object built inside parseLessonRow, or on any lesson-shaped
+   * object (e.g. an already-parsed lesson) that exposes the same three
+   * fields, so other callers (the web app, tools/healthcheck.js) can reuse
+   * the exact same rule instead of re-deriving it.
+   */
+  function isMaterialRow(entry) {
+    if (!entry || typeof entry !== 'object') return false;
+    return isEmptyCell(entry.lesson_id) && !isEmptyCell(entry.source_url) && !isEmptyCell(entry.reading_text);
+  }
+
   // ---------------------------------------------------------------------
   // parseLessonRow
   // ---------------------------------------------------------------------
@@ -318,13 +351,33 @@
         'Row has ' + (Array.isArray(row) ? row.length : typeof row) +
           ' cells, expected ' + Contract.LESSON_COLUMNS.length
       ));
-      return { lesson: null, errors: errors };
+      return { lesson: null, errors: errors, kind: 'broken' };
     }
 
     var raw = {};
     Contract.LESSON_COLUMNS.forEach(function (name, i) {
       raw[name] = row[i];
     });
+
+    // Material row: lesson_id empty, source_url + reading_text present.
+    // Checked before the required-field loop below on purpose -- a material
+    // row is *expected* to be missing lesson_id, reading_questions,
+    // listening_questions, vocab and generated_at, and none of that should
+    // ever surface as an error.
+    if (isMaterialRow(raw)) {
+      var material = {
+        level: String(raw.level),
+        source: String(raw.source),
+        source_url: String(raw.source_url),
+        title: String(raw.title),
+        reading_text: String(raw.reading_text),
+        audio_url: String(raw.audio_url),
+        audio_start_sec: raw.audio_start_sec,
+        audio_end_sec: raw.audio_end_sec,
+        transcript: String(raw.transcript)
+      };
+      return { lesson: null, errors: [], kind: 'material', material: material };
+    }
 
     var missingRequired = false;
     Contract.LESSON_REQUIRED_COLUMNS.forEach(function (name) {
@@ -338,7 +391,7 @@
       }
     });
     if (missingRequired) {
-      return { lesson: null, errors: errors };
+      return { lesson: null, errors: errors, kind: 'broken' };
     }
 
     var jsonFields = ['reading_questions', 'listening_questions', 'vocab'];
@@ -369,7 +422,7 @@
       parsed[name] = value;
     });
     if (badJson) {
-      return { lesson: null, errors: errors };
+      return { lesson: null, errors: errors, kind: 'broken' };
     }
 
     // parseInt on a non-numeric string returns NaN without throwing; left
@@ -396,7 +449,7 @@
       badAudioNumber = true;
     }
     if (badAudioNumber) {
-      return { lesson: null, errors: errors };
+      return { lesson: null, errors: errors, kind: 'broken' };
     }
 
     var lesson = {
@@ -423,7 +476,7 @@
       audio_file_id: isEmptyCell(raw.audio_file_id) ? '' : String(raw.audio_file_id)
     };
 
-    return { lesson: lesson, errors: errors };
+    return { lesson: lesson, errors: errors, kind: 'lesson' };
   }
 
   // ---------------------------------------------------------------------
@@ -687,7 +740,8 @@
 
   return {
     parseLessonRow: parseLessonRow,
-    validateLesson: validateLesson
+    validateLesson: validateLesson,
+    isMaterialRow: isMaterialRow
   };
 });
 // ===== END js/lesson.js =====

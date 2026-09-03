@@ -129,7 +129,14 @@
     AUDIO: 'audio',
     PROGRESS: 'progress',
     APPEND: 'append',
-    SET_LEVEL: 'set_level'
+    SET_LEVEL: 'set_level',
+    /**
+     * Batch-writes material rows (lesson_id empty: text and audio ready,
+     * questions not written yet). Called by tools/upload-materials.js, never
+     * by the web app -- fetching moved off Gemini Spark once the source sites
+     * turned out to block it. See docs/specs/2026-09-02-content-pipeline.md.
+     */
+    ADD_MATERIALS: 'add_materials'
   };
 
   /**

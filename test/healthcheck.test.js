@@ -40,15 +40,15 @@ function issuesWithCode(report, code) {
 // Loading / flattening the fixture
 // ---------------------------------------------------------------------
 
-test('loadRowsFromFile flattens the {good, bad} fixture into 10 raw rows', function () {
+test('loadRowsFromFile flattens the {good, bad, material} fixture into 11 raw rows', function () {
   var rows = Healthcheck.loadRowsFromFile(FIXTURE_PATH);
-  assert.strictEqual(rows.length, 10); // 3 good + 7 bad
+  assert.strictEqual(rows.length, 11); // 3 good + 7 bad + 1 material
 });
 
 test('buildRecordsFromRows produces one record per row, in order', function () {
   var rows = Healthcheck.loadRowsFromFile(FIXTURE_PATH);
   var records = Healthcheck.buildRecordsFromRows(rows);
-  assert.strictEqual(records.length, 10);
+  assert.strictEqual(records.length, 11);
 });
 
 // ---------------------------------------------------------------------
@@ -76,11 +76,62 @@ test('the 3 good fixture rows produce no parse or validate errors at all', funct
   assert.deepStrictEqual(issuesOnGoodRows, []);
 });
 
-test('row counts: 10 total, 7 parsed into a lesson, 3 structurally broken', function () {
+test('row counts: 11 total, 7 parsed into a lesson, 1 material row, 3 structurally broken', function () {
   var report = loadReport();
-  assert.strictEqual(report.total_rows, 10);
+  assert.strictEqual(report.total_rows, 11);
   assert.strictEqual(report.parsed_rows, 7);
+  assert.strictEqual(report.material_rows, 1);
   assert.strictEqual(report.broken_rows, 3);
+});
+
+// ---------------------------------------------------------------------
+// Material rows (lesson_id empty, source_url + reading_text filled in --
+// normal inventory produced by tools/fetch-materials.js, not corruption).
+// See docs/specs/2026-09-02-content-pipeline.md, "空值語意有三種".
+// ---------------------------------------------------------------------
+
+test('the 1 material fixture row produces no parse or validate errors either', function () {
+  var report = loadReport();
+  var materialIssues = report.issues.filter(function (i) {
+    return i.location.indexOf('ai-tutors-help-students-focus') !== -1;
+  });
+  assert.deepStrictEqual(materialIssues, []);
+});
+
+test('material_inventory metric: 1 material row in the fixture, always status OK (informational, not a quality gate)', function () {
+  var report = loadReport();
+  var m = metric(report, 'material_inventory');
+  assert.strictEqual(m.data.material_count, 1);
+  assert.strictEqual(m.status, 'OK');
+  assert.ok(m.detail.indexOf('1') !== -1 && m.detail.indexOf('尚未出題') !== -1, m.detail);
+});
+
+test('required_field_empty_rate and json_parse_rate denominators exclude material rows (regression: a material row must not be treated as a row with 5 empty required fields)', function () {
+  // Isolated from the shared fixture on purpose: one lesson-less material row
+  // only, so any leak of material rows into these denominators would show up
+  // immediately as a non-zero total_slots instead of the correct 0.
+  var rows = [require(FIXTURE_PATH).material[0]];
+  var records = Healthcheck.buildRecordsFromRows(rows);
+  var report = Healthcheck.computeReport(records, { now: FIXED_NOW, source: 'material-only' });
+  assert.strictEqual(metric(report, 'required_field_empty_rate').data.total_slots, 0);
+  assert.strictEqual(metric(report, 'json_parse_rate').data.total_slots, 0);
+  assert.strictEqual(report.material_rows, 1);
+  assert.strictEqual(report.broken_rows, 0);
+  assert.strictEqual(report.issues.length, 0);
+});
+
+test('dedupe_source_url still catches a material row that reuses a source_url already used by a real lesson', function () {
+  var goodRow = require(FIXTURE_PATH).good[0]; // source_url: .../solar-power-helps-kenyan-farmers/7214563.html
+  var materialRow = require(FIXTURE_PATH).material[0].slice();
+  materialRow[3] = goodRow[3]; // reuse the good row's source_url
+  var records = Healthcheck.buildRecordsFromRows([goodRow, materialRow]);
+  var report = Healthcheck.computeReport(records, { now: FIXED_NOW, source: 'dedupe-check' });
+  var m = metric(report, 'dedupe_source_url');
+  assert.strictEqual(m.data.duplicate_groups, 1);
+  assert.strictEqual(m.status, 'FAIL');
+  var dupIssues = issuesWithCode(report, Contract.ERRORS.DUPLICATE_SOURCE_URL);
+  assert.strictEqual(dupIssues.length, 1);
+  assert.ok(dupIssues[0].message.indexOf('2 次') !== -1, dupIssues[0].message);
 });
 
 // ---------------------------------------------------------------------

@@ -176,6 +176,63 @@ test('bad_audio_segment: a 40-second segment still parses, validateLesson flags 
 });
 
 // ---------------------------------------------------------------------
+// Material rows (lesson_id empty, source_url + reading_text filled in --
+// normal inventory from tools/fetch-materials.js, not a corrupted row).
+// See docs/specs/2026-09-02-content-pipeline.md, "空值語意有三種".
+// ---------------------------------------------------------------------
+
+test('parseLessonRow recognizes the material fixture row: lesson null, no errors, kind "material"', function () {
+  var parsed = Lesson.parseLessonRow(fixtures.material[0]);
+  assert.strictEqual(parsed.lesson, null);
+  assert.deepStrictEqual(parsed.errors, []);
+  assert.strictEqual(parsed.kind, 'material');
+  assert.ok(parsed.material, 'a material row should carry a `material` payload');
+  assert.strictEqual(parsed.material.source_url, fixtures.material[0][3]);
+  assert.strictEqual(parsed.material.reading_text, fixtures.material[0][5]);
+});
+
+test('a good fixture row parses with kind "lesson"', function () {
+  var parsed = Lesson.parseLessonRow(fixtures.good[0]);
+  assert.strictEqual(parsed.kind, 'lesson');
+});
+
+test('a fatally broken row (e.g. row_too_short) parses with kind "broken", never "material"', function () {
+  var parsed = Lesson.parseLessonRow(fixtures.bad.row_too_short);
+  assert.strictEqual(parsed.lesson, null);
+  assert.strictEqual(parsed.kind, 'broken');
+});
+
+test('a row missing both lesson_id and source_url is a real MISSING_FIELD failure, not a material row', function () {
+  var row = fixtures.good[0].slice();
+  row[0] = ''; // lesson_id
+  row[3] = ''; // source_url
+  var parsed = Lesson.parseLessonRow(row);
+  assert.strictEqual(parsed.lesson, null);
+  assert.notStrictEqual(parsed.kind, 'material');
+  assert.strictEqual(parsed.kind, 'broken');
+  assert.ok(errorCodes(parsed.errors).indexOf(Contract.ERRORS.MISSING_FIELD) !== -1, JSON.stringify(parsed.errors));
+});
+
+test('a row with lesson_id empty and source_url present but reading_text empty is a real MISSING_FIELD failure, not a material row', function () {
+  var row = fixtures.good[0].slice();
+  row[0] = ''; // lesson_id
+  row[5] = ''; // reading_text
+  var parsed = Lesson.parseLessonRow(row);
+  assert.strictEqual(parsed.lesson, null);
+  assert.notStrictEqual(parsed.kind, 'material');
+  assert.ok(errorCodes(parsed.errors).indexOf(Contract.ERRORS.MISSING_FIELD) !== -1, JSON.stringify(parsed.errors));
+});
+
+test('Lesson.isMaterialRow is exported and matches the same rule directly on a lesson-shaped object', function () {
+  assert.strictEqual(typeof Lesson.isMaterialRow, 'function');
+  assert.strictEqual(Lesson.isMaterialRow({ lesson_id: '', source_url: 'https://x', reading_text: 'text' }), true);
+  assert.strictEqual(Lesson.isMaterialRow({ lesson_id: '2026-08-01', source_url: 'https://x', reading_text: 'text' }), false);
+  assert.strictEqual(Lesson.isMaterialRow({ lesson_id: '', source_url: '', reading_text: 'text' }), false);
+  assert.strictEqual(Lesson.isMaterialRow({ lesson_id: '', source_url: 'https://x', reading_text: '' }), false);
+  assert.strictEqual(Lesson.isMaterialRow(null), false);
+});
+
+// ---------------------------------------------------------------------
 // Whole-batch resilience: no bad row may ever throw
 // ---------------------------------------------------------------------
 

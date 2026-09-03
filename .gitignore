@@ -5,6 +5,10 @@ js/config.local.js
 # multi-llm working notes -- development process, not part of the project
 multi-llm-state.md
 
+# Fetched lesson material. Data, not code: regenerate with
+# `node tools/fetch-materials.js`, and it lives in the sheet once uploaded.
+materials*.json
+
 # OS / editor noise
 Thumbs.db
 .DS_Store

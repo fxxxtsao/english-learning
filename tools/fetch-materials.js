@@ -136,15 +136,54 @@ async function fetchArticle(url) {
   if (!title || !body || !audio) return null;
   if (body.split(/\s+/).length < 150) return null; // too short to practise on
 
+  const segment = openingSegment(body);
+
   return {
+    // VOA Learning English sits at roughly CEFR B1 across these categories,
+    // which also matches the project's starting level. The web app adjusts
+    // from here based on how the answers actually go.
+    level: 'B1',
     source: 'voa_le',
     source_url: url,
     title,
     reading_text: body,
     audio_url: audio,
+    // The audio is a straight reading of the article, so the practice segment
+    // starts at zero -- which is a sentence boundary by definition, and saves
+    // guessing where a later one falls without listening to the file.
+    audio_start_sec: 0,
+    audio_end_sec: SEGMENT_SECONDS,
+    transcript: segment,
     word_count: body.split(/\s+/).length,
     published: date
   };
+}
+
+/** Practice segment length, within the 120-180s the spec allows. */
+const SEGMENT_SECONDS = 180;
+
+/** VOA Learning English is read deliberately slowly; this is about its pace. */
+const WORDS_PER_MINUTE = 110;
+
+/**
+ * The transcript for the practice segment: the opening of the article, cut at
+ * a sentence end near however many words fit in SEGMENT_SECONDS. Ending
+ * mid-sentence would make the listening questions unanswerable from the text
+ * the learner is given.
+ */
+function openingSegment(body) {
+  const budget = Math.round((SEGMENT_SECONDS / 60) * WORDS_PER_MINUTE);
+  const words = body.split(/\s+/);
+  if (words.length <= budget) return body;
+
+  const rough = words.slice(0, budget).join(' ');
+  const lastStop = Math.max(
+    rough.lastIndexOf('. '),
+    rough.lastIndexOf('." '),
+    rough.lastIndexOf('? '),
+    rough.lastIndexOf('! ')
+  );
+  return lastStop > rough.length * 0.5 ? rough.slice(0, lastStop + 1) : rough;
 }
 
 function parseArgs(argv) {

@@ -108,8 +108,10 @@ function parseYmdUTC(s) {
  * Reads a local JSON file and returns a flat array of raw sheet rows.
  * Accepts two shapes:
  *   - a plain 2D array of rows (as the `lessons` sheet's values look)
- *   - the {good: [...rows], bad: {key: row, ...}} shape used by the test
- *     fixture (test/fixtures/lessons-rows.json), flattened into one list.
+ *   - the {good: [...rows], bad: {key: row, ...}, material: [...rows]}
+ *     shape used by the test fixture (test/fixtures/lessons-rows.json),
+ *     flattened into one list. `material` is optional -- sample material
+ *     rows (lesson_id empty, source_url + reading_text filled in).
  */
 function loadRowsFromFile(filePath) {
   var raw = fs.readFileSync(filePath, 'utf8');
@@ -129,15 +131,21 @@ function loadRowsFromFile(filePath) {
         rows.push(data.bad[k]);
       });
     }
+    if (Array.isArray(data.material)) {
+      rows = rows.concat(data.material);
+    }
     if (rows.length > 0) return rows;
   }
 
   throw new Error('無法辨識的 JSON 格式：' + filePath + '（需為二維陣列，或 {good, bad} 格式）');
 }
 
-/** Best-effort human-readable location label for a raw row that may be fatally broken. */
-function rowLabel(row, index, lesson) {
-  if (lesson && lesson.lesson_id) return lesson.lesson_id;
+/** Best-effort human-readable location label for a raw row that may be fatally broken or a material row (no lesson_id either way). */
+function rowLabel(row, index, parsed) {
+  if (parsed && parsed.lesson && parsed.lesson.lesson_id) return parsed.lesson.lesson_id;
+  if (parsed && parsed.kind === 'material' && parsed.material && parsed.material.source_url) {
+    return '（素材）' + parsed.material.source_url;
+  }
   if (Array.isArray(row) && typeof row[0] === 'string' && row[0].trim() !== '') return row[0];
   return '第 ' + (index + 1) + ' 列';
 }
@@ -148,8 +156,10 @@ function buildRecordsFromRows(rows) {
     var parsed = Lesson.parseLessonRow(row);
     var validateErrors = parsed.lesson ? Lesson.validateLesson(parsed.lesson) : [];
     return {
-      location: rowLabel(row, idx, parsed.lesson),
+      location: rowLabel(row, idx, parsed),
       lesson: parsed.lesson,
+      kind: parsed.kind,
+      material: parsed.material || null,
       parseErrors: parsed.errors,
       validateErrors: validateErrors
     };
@@ -226,6 +236,16 @@ function computeReport(records, opts) {
   var parsedRecords = records.filter(function (r) { return !!r.lesson; });
   var parsedLessons = parsedRecords.map(function (r) { return r.lesson; });
 
+  // Material rows (kind: 'material'): lesson_id empty, source_url +
+  // reading_text filled in -- content tools/fetch-materials.js already
+  // fetched, Gemini Spark just hasn't written questions for it yet. Normal
+  // inventory, not corruption -- excluded from every per-lesson quality
+  // metric's denominator below, never added to `issues`, but still an input
+  // to the source_url dedupe check (re-fetching the same article is a real
+  // problem regardless of whether it became a lesson yet).
+  var materialRecords = records.filter(function (r) { return r.kind === 'material'; });
+  var materialCount = materialRecords.length;
+
   // Flat issue list: every parse/validate error on every record.
   var issues = [];
   records.forEach(function (rec) {
@@ -255,8 +275,10 @@ function computeReport(records, opts) {
     });
   });
 
-  // --- cross-row: duplicate source_url ---
-  var bySourceUrl = groupBy(parsedLessons, 'source_url');
+  // --- cross-row: duplicate source_url (covers material rows too -- see
+  // materialRecords comment above) ---
+  var sourceUrlSubjects = parsedLessons.concat(materialRecords.map(function (r) { return r.material; }));
+  var bySourceUrl = groupBy(sourceUrlSubjects, 'source_url');
   var sourceUrlDupGroups = Object.keys(bySourceUrl).filter(function (k) { return bySourceUrl[k].length > 1; });
   sourceUrlDupGroups.forEach(function (k) {
     issues.push({
@@ -276,18 +298,22 @@ function computeReport(records, opts) {
   });
 
   // --- required field empty rate (excludes ROW_TOO_SHORT rows: field-level
-  // detail is unknowable there since parseLessonRow bails before checking) ---
+  // detail is unknowable there since parseLessonRow bails before checking;
+  // excludes material rows, which are expected to be missing most required
+  // fields and never generate MISSING_FIELD for it) ---
   var rowTooShortCount = records.filter(function (r) {
     return recordHasAnyCode(r, [Contract.ERRORS.ROW_TOO_SHORT]);
   }).length;
-  var requiredFieldSlots = (totalRows - rowTooShortCount) * (Contract.LESSON_COLUMNS.length - 1);
+  var requiredFieldSlots = (totalRows - rowTooShortCount - materialCount) * (Contract.LESSON_COLUMNS.length - 1);
   var missingFieldCount = countCodeOccurrences(records, [Contract.ERRORS.MISSING_FIELD]);
 
   // --- JSON parse rate (reading_questions / listening_questions / vocab) ---
   // Only counts rows that actually reached the JSON-parsing stage in
-  // parseLessonRow -- ROW_TOO_SHORT / MISSING_FIELD rows never got there.
+  // parseLessonRow -- ROW_TOO_SHORT / MISSING_FIELD rows never got there,
+  // and material rows return before that stage too (their reading_questions
+  // / listening_questions / vocab columns are empty by design).
   var jsonEligible = records.filter(function (r) {
-    return !recordHasAnyCode(r, [Contract.ERRORS.ROW_TOO_SHORT, Contract.ERRORS.MISSING_FIELD]);
+    return r.kind !== 'material' && !recordHasAnyCode(r, [Contract.ERRORS.ROW_TOO_SHORT, Contract.ERRORS.MISSING_FIELD]);
   });
   var jsonSlots = jsonEligible.length * 3;
   var jsonFails = countCodeOccurrences(jsonEligible, [Contract.ERRORS.BAD_JSON, Contract.ERRORS.NOT_AN_ARRAY]);
@@ -406,6 +432,16 @@ function computeReport(records, opts) {
         ? '無寫入滿 24 小時的列可評估'
         : pctStr(filled.length, eligible.length) + '（' + filled.length + '/' + eligible.length + '，期望 100%）',
       data: { filled_count: filled.length, eligible_count: eligible.length }
+    },
+    {
+      // Informational only (always OK) -- this is inventory, not a quality
+      // gate. It tells the user how many days of content are still sitting
+      // in the sheet waiting for Gemini Spark to write questions for it.
+      key: 'material_inventory',
+      label: '素材庫存',
+      status: 'OK',
+      detail: materialCount + ' 列尚未出題',
+      data: { material_count: materialCount }
     }
   ];
 
@@ -416,7 +452,8 @@ function computeReport(records, opts) {
     generated_at: now.toISOString(),
     total_rows: totalRows,
     parsed_rows: parsedRecords.length,
-    broken_rows: totalRows - parsedRecords.length,
+    material_rows: materialCount,
+    broken_rows: totalRows - parsedRecords.length - materialCount,
     ok: ok,
     metrics: metrics,
     issues: issues
@@ -432,7 +469,8 @@ function formatHumanReport(report) {
   lines.push('=== 英語學習內容每日健檢報告 ===');
   lines.push('來源：' + (report.source || '(未提供)'));
   lines.push('產出時間：' + report.generated_at);
-  lines.push('掃描列數：' + report.total_rows + '（成功解析 ' + report.parsed_rows + ' 列，結構損壞 ' + report.broken_rows + ' 列）');
+  lines.push('掃描列數：' + report.total_rows + '（成功解析 ' + report.parsed_rows + ' 列，素材待出題 ' +
+    report.material_rows + ' 列，結構損壞 ' + report.broken_rows + ' 列）');
   lines.push('');
   report.metrics.forEach(function (m) {
     lines.push('[' + m.status + '] ' + m.label + '：' + m.detail);

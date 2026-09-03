@@ -167,5 +167,24 @@
       15,
       165
     ]
-  }
+  },
+  "material": [
+    [
+      "",
+      "B1",
+      "voa_le",
+      "https://learningenglish.voanews.com/a/ai-tutors-help-students-focus/9219001.html",
+      "AI Tutors Help Students Focus, Researchers Say",
+      "A new generation of AI-powered tutoring tools is helping some students stay focused during online lessons, according to researchers at a university in Canada. The tools track how long a student looks at the screen and gently prompt them when their attention drifts.\n\nThe research team studied more than two hundred high school students over one semester. Students who used the AI tutor reported fewer distractions and said they finished homework assignments more quickly than before.\n\nNot every teacher is convinced the tools are worth the cost. Some worry that constant prompts could make students anxious rather than focused. The research team says more studies are needed before schools adopt the technology widely.",
+      "",
+      "https://learningenglish.voanews.com/media/audio/ai-tutors-full.mp3",
+      0,
+      180,
+      "A new generation of AI-powered tutoring tools is helping some students stay focused during online lessons, according to researchers at a university in Canada. The tools track how long a student looks at the screen and gently prompt them when their attention drifts.",
+      "",
+      "",
+      "",
+      ""
+    ]
+  ]
 }

@@ -229,12 +229,21 @@
    * it only flags non-fatal quality issues (e.g. an audio segment outside
    * the expected length, a vocab term not found in the source text). Those
    * lessons stay fully usable; the issues are only surfaced as warnings.
+   *
+   * A third shape can show up in `lessonList`: material rows (lesson_id
+   * empty, source_url + reading_text filled in -- content fetched by
+   * tools/fetch-materials.js, not yet turned into a lesson by Gemini Spark).
+   * That's normal inventory, not a broken lesson, so it must not be shown
+   * and must not be counted as corrupted -- see
+   * docs/specs/2026-09-02-content-pipeline.md's "空值語意有三種".
    */
   function ingestLessons(lessonList) {
     var byId = {};
     var qualityWarnings = [];
     (lessonList || []).forEach(function (lesson) {
-      if (!lesson || !lesson.lesson_id) return;
+      if (!lesson) return;
+      if (LessonMod.isMaterialRow(lesson)) return; // inventory, not a lesson -- never shown, never counted as broken
+      if (!lesson.lesson_id) return;
       byId[lesson.lesson_id] = lesson;
 
       var issues;
