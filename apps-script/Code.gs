@@ -79,7 +79,13 @@ function route(e) {
         return actionAppend(e);
       case Contract.ACTIONS.SET_LEVEL:
         return actionSetLevel(e);
-      case Contract.ACTIONS.ADD_MATERIALS:
+      // Matched against the literal, not only Contract.ACTIONS.ADD_MATERIALS.
+      // Shared.gs is pasted in by hand and can lag behind this file; when it
+      // does, that constant is undefined, no switch case ever matches it, and
+      // the request falls through to unknown_action with nothing pointing at
+      // the real cause (a stale paste). Accepting the literal keeps this
+      // action working across that gap.
+      case 'add_materials':
         return actionAddMaterials(e);
       default:
         return jsonOutput({ ok: false, error: 'unknown_action' });
@@ -128,6 +134,15 @@ function actionLessons(params) {
 
   var lessons = [];
   var errors = [];
+  var materials = [];
+
+  // The web app never wants material rows; the daily health check does, both
+  // to report how many days of lessons are left and to include their
+  // source_urls in the duplicate check. Off by default so the app's payload
+  // stays small -- one flag rather than a second endpoint, because the two
+  // callers want the same rows read the same way.
+  var includeMaterials = params.include_materials === '1' ||
+    params.include_materials === 'true';
 
   values.forEach(function (row, idx) {
     var rawLessonId = row[0] ? String(row[0]) : '';
@@ -135,11 +150,13 @@ function actionLessons(params) {
     // An empty lesson_id marks a "material row" (source text + audio ready,
     // no questions yet — written by action=add_materials, filled in later
     // by Spark; see docs/specs/2026-09-02-content-pipeline.md). That is a
-    // normal inventory state, not a broken row, so it is skipped entirely
-    // here: not returned in `lessons` (nothing to render — no questions
-    // yet) and not reported in `errors` (parseLessonRow would otherwise
-    // flag it as MISSING_FIELD, which would be misleading).
+    // normal inventory state, not a broken row: never returned in `lessons`
+    // (nothing to render without questions) and never in `errors`
+    // (parseLessonRow would flag MISSING_FIELD, which would be misleading).
     if (!rawLessonId) {
+      if (includeMaterials) {
+        materials.push(rowToObject(row, idx + 2));
+      }
       return;
     }
 
@@ -163,7 +180,21 @@ function actionLessons(params) {
     }
   });
 
-  return jsonOutput({ ok: true, lessons: lessons, errors: errors });
+  var payload = { ok: true, lessons: lessons, errors: errors };
+  if (includeMaterials) {
+    payload.materials = materials;
+    payload.material_count = materials.length;
+  }
+  return jsonOutput(payload);
+}
+
+/** Maps a raw sheet row onto its column names, for callers that want it whole. */
+function rowToObject(row, sheetRow) {
+  var obj = { _row: sheetRow };
+  Contract.LESSON_COLUMNS.forEach(function (name, i) {
+    obj[name] = row[i];
+  });
+  return obj;
 }
 
 /**

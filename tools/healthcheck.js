@@ -191,6 +191,21 @@ function buildRecordsFromApiResponse(body) {
       validateErrors: []
     });
   });
+  // Material rows arrive only when include_materials=1 (see buildLessonsUrl).
+  // They carry no questions yet, so running validateLesson on them would just
+  // report the absence of things that are not due yet; they are recorded so
+  // the report can count remaining inventory and so their source_urls join
+  // the duplicate check.
+  (body.materials || []).forEach(function (material) {
+    records.push({
+      location: material.title || ('第 ' + material._row + ' 列'),
+      lesson: null,
+      kind: 'material',
+      material: material,
+      parseErrors: [],
+      validateErrors: []
+    });
+  });
   return records;
 }
 
@@ -200,6 +215,10 @@ function buildLessonsUrl(url) {
   if (!u.searchParams.has('action')) {
     u.searchParams.set('action', Contract.ACTIONS.LESSONS);
   }
+  // The web app is served material rows filtered out; this tool needs them,
+  // to report how many days of lessons remain and to include their
+  // source_urls in the duplicate check.
+  u.searchParams.set('include_materials', '1');
   return u.toString();
 }
 
