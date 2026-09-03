@@ -41,6 +41,7 @@
     queues: { reading: [], listening: [], vocab: [] },
     queueIndex: { reading: 0, listening: 0, vocab: 0 },
     audioFailed: false,
+    staleDeploymentRows: 0,
     currentAudioObjectUrl: null
   };
 
@@ -130,7 +131,12 @@
         // Rows Code.gs's parseLessonRow rejected outright (structurally
         // broken -- never dropped silently, story 9) plus any non-fatal
         // validateLesson warnings on the rows that DID come through.
-        state.corrupted = (lessonsResponse.errors || []).concat(ingested.qualityWarnings);
+        var reported = lessonsResponse.errors || [];
+        var staleDeployment = reported.filter(looksLikeMaterialRowError);
+        state.staleDeploymentRows = staleDeployment.length;
+        state.corrupted = reported
+          .filter(function (entry) { return !looksLikeMaterialRowError(entry); })
+          .concat(ingested.qualityWarnings);
         renderLessonErrors();
 
         var settings = Store.getSettings();
@@ -704,7 +710,48 @@
    * that loaded fine but tripped a non-fatal validateLesson warning (shape
    * { lesson_id, errors }).
    */
+  /**
+   * Exactly the fields a material row is expected to lack: text and audio are
+   * ready, the questions are not written yet. See
+   * docs/specs/2026-09-02-content-pipeline.md.
+   */
+  var MATERIAL_MISSING_FIELDS = [
+    'generated_at', 'lesson_id', 'listening_questions', 'reading_questions', 'vocab'
+  ];
+
+  /**
+   * True for a material row seen through an out-of-date Apps Script
+   * deployment.
+   *
+   * Current server code skips these rows: an empty lesson_id means inventory,
+   * not damage. A deployment still running older code reports them as broken,
+   * and relaying that verbatim filled the screen with red text for every
+   * article waiting to be used -- while the actual cause, "this device is
+   * pointed at the old URL", appeared nowhere. The signature is exact (every
+   * error MISSING_FIELD, on precisely those five fields), so a genuinely
+   * broken row is not swallowed by it.
+   */
+  function looksLikeMaterialRowError(entry) {
+    var errors = (entry && entry.errors) || [];
+    if (errors.length !== MATERIAL_MISSING_FIELDS.length) return false;
+    var fields = errors.map(function (e) {
+      return e.code === Contract.ERRORS.MISSING_FIELD ? e.field : null;
+    }).sort();
+    return fields.every(function (field, i) { return field === MATERIAL_MISSING_FIELDS[i]; });
+  }
+
   function renderLessonErrors() {
+    // Say what actually needs fixing. Without this the symptom (rows reported
+    // broken) and the cause (this device still points at an old deployment)
+    // look unrelated, which is exactly how this cost an evening once.
+    if (state.staleDeploymentRows) {
+      dom.lessonErrors.hidden = false;
+      dom.lessonErrors.textContent = '此裝置連到的可能是舊版 Apps Script 部署：' +
+        state.staleDeploymentRows + ' 列尚未出題的教材被誤報為損壞。' +
+        '請到設定畫面確認 Apps Script 網址是最新的那一組。';
+      return;
+    }
+
     if (!state.corrupted.length) {
       dom.lessonErrors.hidden = true;
       dom.lessonErrors.textContent = '';
