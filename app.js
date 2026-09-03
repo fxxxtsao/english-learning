@@ -704,10 +704,35 @@
     dom.lessonErrors.hidden = false;
     dom.lessonErrors.textContent = 'Issues in ' + state.corrupted.length + ' lesson row(s): ' +
       state.corrupted.map(function (c) {
-        var label = c.lesson_id || (c.row ? ('row ' + c.row) : 'unknown');
-        var codes = (c.errors || []).map(function (e) { return e.code; }).join(',');
+        var label = shortLessonLabel(c.lesson_id) || (c.row ? ('row ' + c.row) : 'unknown');
+        // Name the offending field, not just the code. "MISSING_FIELD,
+        // MISSING_FIELD" tells the reader nothing they can act on;
+        // "MISSING_FIELD:reading_text" points straight at what to fix.
+        var codes = (c.errors || []).map(function (e) {
+          return e.field ? (e.code + ':' + e.field) : e.code;
+        }).join(', ');
         return label + (codes ? ' (' + codes + ')' : '');
       }).join('; ');
+  }
+
+  /**
+   * Sheets hands back a real Date for a date-shaped cell, and a row too
+   * broken to parse still carries that raw value into the error report --
+   * where "Thu Sep 03 2026 00:00:00 GMT+0800 (Taiwan Standard Time)" buries
+   * the rest of the message. Trim it back to the date.
+   */
+  function shortLessonLabel(value) {
+    if (!value) return '';
+    var text = String(value);
+    var iso = text.match(/^\d{4}-\d{2}-\d{2}/);
+    if (iso) return iso[0];
+    var parsed = new Date(text);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.getFullYear() + '-' +
+        ('0' + (parsed.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + parsed.getDate()).slice(-2);
+    }
+    return text;
   }
 
   // ---------------------------------------------------------------------
